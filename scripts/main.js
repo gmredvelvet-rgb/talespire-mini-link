@@ -1,8 +1,9 @@
 import { ID, VERSION, SCHEMA, one, keyOf, check, emptyRegistry, fingerprint, selectionPlan } from "./model.js";
 import { TaleSpireAdapter, FoundryAdapter, StorageService } from "./adapters.js";
 import { LinkManager } from "./link-manager.js";
+import { emptyEncounters, validateEncounters, createEncounter, renameEncounter, deleteEncounter, assignMinis, encounterOf, sortedEncounters, suggestName } from "./encounters.js";
 
-const t = key => game.i18n.localize(`TML.${key}`);
+const t = (key, data) => game.i18n.localize(`TML.${key}`, data);
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 let manager, panel, adapter, ts;
 let refreshing = false, syncing = false, pendingRefresh = false, pendingSync = false;
@@ -16,8 +17,14 @@ function report(error) {
   if (setting("debug")) console.warn("[TaleSpireFoundry]", error);
   ui.notifications.warn(errorText(error));
 }
-function button(action, icon, label, disabled = false, data = "") {
-  return `<button type="button" data-action="${action}" ${data} ${disabled ? "disabled" : ""} title="${esc(t(label))}"><i class="fa-solid ${icon}" inert></i><span>${esc(t(label))}</span></button>`;
+// One button vocabulary for the whole panel. `variant` is any of: primary (the
+// one main step of a card), danger, ghost (quiet, no surface), icon (square,
+// its label becomes the tooltip) and block (full width); none is secondary.
+function button(action, icon, label, { disabled = false, data = "", variant = "", text = null } = {}) {
+  const tip = esc(t(label));
+  const classes = ["tml-btn", ...variant.split(" ").filter(Boolean).map(v => `tml-btn-${v}`)].join(" ");
+  const caption = variant.includes("icon") ? "" : `<span>${esc(text ?? t(label))}</span>`;
+  return `<button type="button" class="${classes}" data-action="${action}" ${data} ${disabled ? "disabled" : ""} data-tooltip="${tip}" aria-label="${tip}"><i class="fa-solid ${icon}" inert></i>${caption}</button>`;
 }
 
 class MiniLinksPanel extends foundry.applications.api.ApplicationV2 {
@@ -32,11 +39,26 @@ class MiniLinksPanel extends foundry.applications.api.ApplicationV2 {
       select: async function(event, target) { await this.perform(() => selectLinked(target.dataset.key)); },
       sheet: async function(event, target) { await this.perform(() => openSheet(target.dataset.key)); },
       inspect: async function(event, target) { await this.perform(() => inspectMini(target.dataset.key)); },
-      rebuild: async function() { await this.perform(recoverWithConfirmation); }
+      rebuild: async function() { await this.perform(recoverWithConfirmation); },
+      encNew: async function() { await this.perform(() => newEncounter()); },
+      encRename: async function() { await this.perform(() => renameCurrentEncounter()); },
+      encDelete: async function() { await this.perform(() => deleteCurrentEncounter()); },
+      encAssign: async function() { await this.perform(() => assignSelection()); },
+      encStart: async function() { await this.perform(() => startEncounter(this.filter)); },
+      // Not through perform(): copying changes nothing, so there is nothing to refresh.
+      copyName: (event, target) => copyName(target.dataset.copy).catch(report)
     }
   };
-  state = { connected: false, selection: [], tokens: [], links: [], failure: null };
+  // Encounters are read up front: the first render happens before the first
+  // refresh, and must already know which zones exist.
+  state = { connected: false, selection: [], tokens: [], links: [], failure: null, encounters: readEncounters() };
   busy = false;
+  // "all", "none" (no encounter) or an encounter id. Per client, like a tab.
+  filter = readFilter();
+  setFilter(value) {
+    this.filter = value;
+    try { localStorage.setItem(FILTER_KEY, value); } catch { /* private mode */ }
+  }
   async perform(work) {
     if (this.busy) return;
     this.busy = true;
@@ -46,36 +68,121 @@ class MiniLinksPanel extends foundry.applications.api.ApplicationV2 {
   async _renderHTML() {
     const root = document.createElement("div");
     root.className = "tml-body";
-    const { connected, selection, tokens, links, failure, hello } = this.state;
+    const { connected, selection, tokens, links, failure, hello, encounters } = this.state;
     const selected = selection.length === 1 ? selection[0] : null;
     const canWrite = game.user.isGM && game.users.activeGM?.id === game.user.id;
     const miniLabel = selected?.name ?? t(selection.length ? "manyMinis" : "noMini");
     const tokenLabel = tokens.length === 1 ? tokens[0].name : t(tokens.length ? "manyTokens" : "noToken");
+
+    // Encounters: the filter decides which links are listed. A filter naming a
+    // zone that no longer exists shows everything, without overwriting the
+    // saved choice.
+    const zones = sortedEncounters(encounters);
+    const filter = ["all", "none"].includes(this.filter) || encounters.encounters[this.filter] ? this.filter : "all";
+    const linkKey = ({ record }) => keyOf(record.campaignId, record.creatureId);
+    const zoneOf = link => encounterOf(encounters, linkKey(link));
+    const inFilter = link => filter === "all" || (filter === "none" ? !zoneOf(link) : zoneOf(link) === filter);
+    const shown = links.filter(inFilter);
+    const countIn = id => links.filter(l => zoneOf(l) === id).length;
+    const zone = encounters.encounters[filter] ?? null;
+    const selectedLinked = selection.filter(m => manager.byCreatureId.has(keyOf(m.campaignId, m.id))).length;
+    const option = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
+    const filterSelect = `<select data-role="filter" aria-label="${esc(t("encounter"))}">
+        ${option("all", `${t("encAll")} (${links.length})`, filter)}
+        ${option("none", `${t("encNone")} (${links.filter(l => !zoneOf(l)).length})`, filter)}
+        ${zones.length ? `<optgroup label="${esc(t("encounters"))}">${zones.map(z => option(z.id, `${z.name} (${countIn(z.id)})`, filter)).join("")}</optgroup>` : ""}
+      </select>`;
+    // Rename and delete act on the zone picked in the filter, so they sit beside it.
+    const zoneEdit = canWrite && zone
+      ? `${button("encRename", "fa-pen", "encRename", { variant: "icon ghost" })}${button("encDelete", "fa-trash", "encDelete", { variant: "icon ghost danger" })}`
+      : "";
+    const zoneTools = canWrite && zone ? `<div class="tml-enc-tools">
+        ${button("encStart", "fa-swords", "encStart", { disabled: !countIn(zone.id), variant: "primary grow" })}
+        ${button("encAssign", "fa-user-plus", "encAssignHint", { disabled: !connected || !selectedLinked, text: t("encAssign", { n: selectedLinked }) })}
+      </div>` : "";
+    const moveSelect = link => `<select class="tml-move" data-role="move" data-key="${esc(linkKey(link))}" aria-label="${esc(t("encMove"))}" data-tooltip="${esc(t("encMove"))}">
+        ${option("", t("encNone"), zoneOf(link) ?? "")}${zones.map(z => option(z.id, z.name, zoneOf(link) ?? "")).join("")}
+      </select>`;
+    const zoneBadge = link => zoneOf(link) ? `<span class="tml-enc-badge">${esc(encounters.encounters[zoneOf(link)].name)}</span>` : "";
+    const copy = (name, variant = "icon") => name ? button("copyName", "fa-copy", "copyName", { data: `data-copy="${esc(name)}"`, variant }) : "";
+    const chip = (label, ok) => `<span class="tml-chip ${ok ? "is-ok" : "is-off"}" data-tooltip="${esc(t(ok ? "connected" : "disconnected"))}"><i class="fa-solid fa-circle" inert></i>${label}</span>`;
+    const token = tokens.length === 1 ? tokens[0] : null;
+
     root.innerHTML = `
-      <div class="tml-connection"><span>TaleSpire: <b>${esc(t(connected ? "connected" : "disconnected"))}</b></span><span>Foundry: <b>${esc(t(game.socket?.connected ? "connected" : "disconnected"))}</b></span></div>
-      <div class="tml-status">Mini Bridge: ${esc(t(connected ? "ready" : "disconnected"))}</div>
-      ${failure ? `<p class="tml-notice" role="status">${esc(failure)}</p>` : ""}
-      <dl class="tml-selection"><dt>${esc(t("mini"))}</dt><dd>${esc(miniLabel)}</dd><dt>${esc(t("token"))}</dt><dd>${esc(tokenLabel)}</dd></dl>
-      <div class="tml-actions">${button("link", "fa-link", "link", !canWrite || !connected || !selected || tokens.length !== 1)}${button("refresh", "fa-rotate", "refresh")}</div>
-      ${game.user.isGM && !canWrite ? `<p class="tml-notice">${esc(t("activeGMOnly"))}</p>` : ""}
-      <h3>${esc(t("savedLinks"))} (${links.length})</h3>
-      <div class="tml-links">${links.map(({ record, status, token }) => {
-        const key = keyOf(record.campaignId, record.creatureId);
+      <header class="tml-header">
+        ${chip("TaleSpire", connected)}${chip("Foundry", !!game.socket?.connected)}
+        <span class="tml-spacer"></span>
+        ${button("refresh", "fa-rotate", "refresh", { variant: "icon ghost" })}
+      </header>
+      ${failure ? `<p class="tml-notice" role="status"><i class="fa-solid fa-triangle-exclamation" inert></i>${esc(failure)}</p>` : ""}
+      <section class="tml-card">
+        <div class="tml-field"><span class="tml-label">${esc(t("mini"))}</span><span class="tml-value ${selected ? "" : "is-empty"}">${esc(miniLabel)}</span></div>
+        <div class="tml-field"><span class="tml-label">${esc(t("token"))}</span><span class="tml-value ${token ? "" : "is-empty"}">${esc(tokenLabel)}</span>${copy(token?.name, "icon ghost")}</div>
+        ${game.user.isGM ? button("link", "fa-link", "link", { disabled: !canWrite || !connected || !selected || !token, variant: "primary block" }) : ""}
+        ${game.user.isGM && !canWrite ? `<p class="tml-notice">${esc(t("activeGMOnly"))}</p>` : ""}
+      </section>
+      <section class="tml-card tml-encounters">
+        <div class="tml-enc-bar">
+          <label class="tml-select"><i class="fa-solid fa-dungeon" inert></i>${filterSelect}</label>
+          ${zoneEdit}${canWrite ? button("encNew", "fa-plus", "encNew", { variant: "icon" }) : ""}
+        </div>
+        ${zoneTools}
+      </section>
+      <h3 class="tml-list-title">${esc(zone ? zone.name : t("savedLinks"))}<span class="tml-count">${shown.length}</span></h3>
+      <div class="tml-links">${shown.map(link => {
+        const { record, status, token: linked } = link;
+        const key = linkKey(link);
         const current = selected && key === keyOf(selected.campaignId, selected.id);
         const data = `data-key="${esc(key)}"`;
-        return `<article class="tml-link ${current ? "tml-current" : ""}">
-          <strong>${esc(current ? selected.name || record.creatureId : record.creatureId)}</strong>
-          <div>${esc(token?.name ?? record.tokenUuid)} / ${esc(token?.actorName ?? record.actorUuid)}</div>
-          <div class="tml-status">${esc(t(status))}${record.syntheticActor ? ` / ${esc(t("synthetic"))}` : ""}</div>
-          <div class="tml-actions">${button("select", "fa-crosshairs", "select", status !== "linked", data)}${button("sheet", "fa-address-card", "sheet", status !== "linked", data)}${button("inspect", "fa-circle-info", "inspect", !connected || hello?.campaignId !== record.campaignId, data)}${button("unlink", "fa-link-slash", "unlink", !canWrite, data)}</div>
+        // Titled by the Foundry token: TaleSpire only names the selected mini, and
+        // a list of creature GUIDs is unreadable once a dungeon is linked.
+        const sub = [linked?.actorName ?? record.actorUuid, record.syntheticActor ? t("synthetic") : "", current && selected.name ? `${t("mini")}: ${selected.name}` : ""].filter(Boolean).join(" · ");
+        return `<article class="tml-link ${current ? "tml-current" : ""} ${status === "linked" ? "" : "is-broken"}">
+          <div class="tml-link-main">
+            <div class="tml-link-text">
+              <strong>${esc(linked?.name ?? record.creatureId)}</strong>
+              <span class="tml-link-sub">${esc(sub)}</span>
+              ${status === "linked" ? "" : `<span class="tml-warn"><i class="fa-solid fa-triangle-exclamation" inert></i>${esc(t(status))}</span>`}
+            </div>
+            ${canWrite ? moveSelect(link) : zoneBadge(link)}
+          </div>
+          <div class="tml-link-actions">
+            ${button("select", "fa-crosshairs", "select", { disabled: status !== "linked", data, variant: "icon" })}
+            ${copy(linked?.name)}
+            ${button("sheet", "fa-address-card", "sheet", { disabled: status !== "linked", data, variant: "icon" })}
+            ${button("inspect", "fa-circle-info", "inspect", { disabled: !connected || hello?.campaignId !== record.campaignId, data, variant: "icon" })}
+            <span class="tml-spacer"></span>
+            ${canWrite ? button("unlink", "fa-link-slash", "unlink", { data, variant: "icon ghost danger" }) : ""}
+          </div>
           <details><summary>${esc(t("identifiers"))}</summary><dl><dt>Creature ID</dt><dd>${esc(record.creatureId)}</dd><dt>Token UUID</dt><dd>${esc(record.tokenUuid)}</dd><dt>Actor UUID</dt><dd>${esc(record.actorUuid)}</dd><dt>Campaign ID</dt><dd>${esc(record.campaignId)}</dd></dl></details>
         </article>`;
-      }).join("") || `<p>${esc(t("empty"))}</p>`}</div>
-      ${canWrite ? button("rebuild", "fa-screwdriver-wrench", "rebuild") : ""}
+      }).join("") || `<p class="tml-empty">${esc(t(zone ? "encEmpty" : "empty"))}</p>`}</div>
+      ${canWrite ? `<footer class="tml-footer">${button("rebuild", "fa-screwdriver-wrench", "rebuild", { variant: "ghost" })}</footer>` : ""}
       ${setting("debug") ? `<pre class="tml-debug">${esc(JSON.stringify({ protocol: SCHEMA, module: VERSION, symbiote: hello?.symbioteVersion, foundry: game.version, capabilities: hello?.capabilities, combat: adapter.getCurrentCombatant() }, null, 2))}</pre>` : ""}`;
     return root;
   }
   _replaceHTML(result, content) { content.replaceChildren(result); }
+  // Selects change state rather than click, so they are wired here, not in actions.
+  _onRender(context, options) {
+    super._onRender?.(context, options);
+    // Each blurs first: refreshPanel waits while a select has focus.
+    this.element.querySelector('[data-role="filter"]')?.addEventListener("change", event => {
+      event.target.blur();
+      this.setFilter(event.target.value);
+      void this.render({ force: false });
+    });
+    for (const select of this.element.querySelectorAll('[data-role="move"]')) {
+      select.addEventListener("change", () => {
+        select.blur();
+        void this.perform(() => moveMini(select.dataset.key, select.value || null));
+      });
+    }
+  }
+}
+
+const FILTER_KEY = `${ID}:encounter-filter`;
+function readFilter() {
+  try { return localStorage.getItem(FILTER_KEY) || "all"; } catch { return "all"; }
 }
 
 async function snapshotTaleSpire() {
@@ -86,9 +193,12 @@ async function snapshotTaleSpire() {
 async function refreshPanel() {
   if (!panel?.rendered || !setting("enabled")) return;
   if (refreshing || panel.busy) { pendingRefresh = true; return; }
+  // Re-rendering replaces the markup, which would snap an open dropdown shut
+  // under the user's cursor. The next heartbeat or change catches up.
+  if (panel.element?.querySelector("select:focus")) return;
   refreshing = true;
   try {
-    const state = { connected: false, selection: [], tokens: adapter.getSelectedTokens().filter(x => adapter.canRead(x)).map(x => adapter.normalize(x)), links: await manager.visibleLinks() };
+    const state = { connected: false, selection: [], tokens: adapter.getSelectedTokens().filter(x => adapter.canRead(x)).map(x => adapter.normalize(x)), links: await manager.visibleLinks(), encounters: readEncounters() };
     try { Object.assign(state, await snapshotTaleSpire(), { connected: true }); }
     catch (error) { state.failure = errorText(error); }
     if (!game.socket?.connected) { state.connected = false; state.failure = t("foundryOffline"); }
@@ -153,6 +263,149 @@ async function recoverWithConfirmation() {
   const result = await manager.rebuild(fingerprint(Object.values(preview.next.links)));
   ui.notifications.info(game.i18n.format("TML.rebuilt", result));
 }
+// The token's own name (Identity tab), ready to paste as the name of its
+// TaleSpire mini. game.clipboard falls back to execCommand when the embedded
+// browser refuses the async clipboard.
+async function copyName(name) {
+  const text = String(name ?? "").trim();
+  check(text, "missingToken");
+  await game.clipboard.copyPlainText(text);
+  ui.notifications.info(t("copied", { name: text }));
+}
+
+// ── Encounters ──────────────────────────────────────────────────────────────
+// For display a damaged registry reads as empty; every write re-reads strictly,
+// so a bad value is reported instead of silently overwritten.
+function readEncounters() {
+  try { return validateEncounters(structuredClone(game.settings.get(ID, "encounters"))); }
+  catch (error) { if (setting("debug")) console.warn("[TaleSpireFoundry] Encounters unreadable", error); return emptyEncounters(); }
+}
+async function writeEncounters(change) {
+  check(game.socket?.connected, "foundryOffline");
+  manager.storage.assertWriter();
+  const next = change(validateEncounters(structuredClone(game.settings.get(ID, "encounters"))));
+  await game.settings.set(ID, "encounters", next);
+}
+async function promptName(title, value = "") {
+  const name = await foundry.applications.api.DialogV2.prompt({
+    window: { title },
+    content: `<label class="tml-prompt">${esc(t("encName"))}<input type="text" name="name" maxlength="40" value="${esc(value)}" autofocus required></label>`,
+    ok: { label: t("encSave"), callback: (event, target) => target.form.elements.name.value },
+    rejectClose: false
+  });
+  return typeof name === "string" ? name : null;
+}
+function currentZone() {
+  const zone = readEncounters().encounters[panel?.filter];
+  check(zone, "changed");
+  return zone;
+}
+async function newEncounter() {
+  manager.storage.assertWriter();
+  const name = await promptName(t("encNew"), suggestName(readEncounters()));
+  if (name === null) return;
+  const id = foundry.utils.randomID();
+  await writeEncounters(registry => createEncounter(registry, name, id).next);
+  panel.setFilter(id);
+}
+async function renameCurrentEncounter() {
+  manager.storage.assertWriter();
+  const zone = currentZone();
+  const name = await promptName(t("encRename"), zone.name);
+  if (name === null) return;
+  await writeEncounters(registry => renameEncounter(registry, zone.id, name));
+}
+async function deleteCurrentEncounter() {
+  manager.storage.assertWriter();
+  const zone = currentZone();
+  const accepted = await foundry.applications.api.DialogV2.confirm({
+    window: { title: t("encDelete") }, content: `<p>${esc(t("encDeletePrompt", { name: zone.name }))}</p>`, rejectClose: false
+  });
+  if (!accepted) return;
+  await writeEncounters(registry => deleteEncounter(registry, zone.id));
+  panel.setFilter("all");
+}
+// The quick way to fill a room: select its minis in TaleSpire, press once.
+async function assignSelection() {
+  const zone = currentZone();
+  manager.refresh();
+  const keys = (await ts.getSelectedCreatures()).map(m => keyOf(m.campaignId, m.id)).filter(k => manager.byCreatureId.has(k));
+  check(keys.length, "encNoSelection");
+  await writeEncounters(registry => assignMinis(registry, zone.id, keys));
+  ui.notifications.info(t("encAssigned", { n: keys.length, name: zone.name }));
+}
+async function moveMini(key, id) {
+  await writeEncounters(registry => assignMinis(registry, id, [key]));
+}
+
+// Starts a room as the Foundry combat: its linked tokens on the scene being
+// viewed, plus the party's tokens there. Everything that reads the combat —
+// tracker, initiative, VN Enhanced — then shows that room and nothing else.
+async function startEncounter(id) {
+  check(game.socket?.connected, "foundryOffline");
+  manager.storage.assertWriter();
+  const zone = readEncounters().encounters[id];
+  check(zone, "changed");
+  const scene = globalThis.canvas?.ready ? canvas.scene : null;
+  check(scene, "noCanvas");
+  manager.refresh();
+  const npcs = [], elsewhere = [];
+  for (const key of zone.members) {
+    const record = manager.byCreatureId.get(key);
+    if (!record) continue;
+    const [, sceneId, , tokenId] = record.tokenUuid.split(".");
+    const token = sceneId === scene.id ? scene.tokens.get(tokenId) : null;
+    if (token) npcs.push(token); else elsewhere.push(record);
+  }
+  check(npcs.length, "encounterEmpty");
+  const party = scene.tokens.filter(token => token.actor?.hasPlayerOwner);
+  const tokens = [...new Map([...party, ...npcs].map(token => [token.id, token])).values()];
+
+  // Only the combat being run on this scene is replaced; other prepared
+  // encounters are left alone.
+  const current = game.combat?.scene?.id === scene.id ? game.combat : null;
+  if (current) {
+    const accepted = await foundry.applications.api.DialogV2.confirm({
+      window: { title: t("encStart") }, content: `<p>${esc(t("encReplacePrompt", { name: zone.name }))}</p>`, rejectClose: false
+    });
+    if (!accepted) return;
+    await current.delete();
+  }
+  await vnReplaceNpcs(npcs.map(token => token.actorId));
+  // One operation, combatants embedded: only createCombat fires, so VN fills
+  // its cast once instead of racing one save per createCombatant.
+  await Combat.implementation.create({
+    scene: scene.id, active: true,
+    combatants: tokens.map(token => ({ tokenId: token.id, sceneId: scene.id, actorId: token.actorId, hidden: token.hidden }))
+  });
+  await vnEnterCombat();
+  ui.notifications.info(t("encStarted", { name: zone.name, npcs: npcs.length, pcs: party.length }));
+  if (elsewhere.length) ui.notifications.warn(t("encElsewhere", { n: elsewhere.length, name: zone.name }));
+}
+
+// VN Enhanced builds its NPC panel from the combat but only ever adds to it, so
+// the previous room's enemies go out through its public API first. The party
+// (left side) is never touched.
+function vnApi() {
+  return game.modules.get("vnd-enhanced")?.active ? globalThis.VNEnhanced ?? null : null;
+}
+async function vnReplaceNpcs(keepActorIds) {
+  const vn = vnApi();
+  if (typeof vn?.getState !== "function" || typeof vn.removeActor !== "function") return;
+  const keep = new Set(keepActorIds);
+  for (const portrait of vn.getState().rightCast ?? []) {
+    if (!keep.has(portrait.id)) await vn.removeActor(portrait.id);
+  }
+}
+async function vnEnterCombat() {
+  const vn = vnApi();
+  if (typeof vn?.setCombatMode !== "function") return;
+  const state = vn.getState();
+  // Only a VN that is open or already fighting: starting a room must not open
+  // the VN for a table that plays without it.
+  if (state.showVN || state.combatMode) await vn.setCombatMode(true);
+}
+
 async function openSheet(key) {
   const record = recordFor(key);
   await manager.resolve(record);
@@ -222,6 +475,7 @@ async function openPanel() {
 
 Hooks.once("init", () => {
   game.settings.register(ID, "links", { scope: "world", config: false, type: Object, default: emptyRegistry() });
+  game.settings.register(ID, "encounters", { scope: "world", config: false, type: Object, default: emptyEncounters() });
   // autoTarget is on by default: it is what lets a player attack by picking the
   // enemy mini in TaleSpire, and it only touches that player's own targets.
   for (const [key, scope, defaultValue] of [["enabled", "world", true], ["autoTarget", "client", true], ["autoSelect", "client", false], ["autoFocus", "client", false], ["debug", "client", false]]) {
@@ -232,6 +486,27 @@ Hooks.once("init", () => {
         if (!setting("enabled")) panel?.close();
       } });
   }
+});
+
+// Two clicks from the map: right-click a token, press copy — no sheet, no token
+// config. Same markup as the core HUD buttons; its own listener rather than a
+// data-action, which the HUD would try to resolve as one of its actions.
+Hooks.on("renderTokenHUD", (hud, html) => {
+  if (Number(game.release.generation) !== 14 || !setting("enabled")) return;
+  const column = html?.querySelector?.(".col.left");
+  if (!column || column.querySelector(".tml-copy-name") || !hud.document?.name) return;
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "control-icon tml-copy-name";
+  copy.dataset.tooltip = t("copyName");
+  copy.setAttribute("aria-label", t("copyName"));
+  copy.innerHTML = '<i class="fa-solid fa-copy" inert></i>';
+  copy.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    copyName(hud.document?.name).catch(report);
+  });
+  column.append(copy);
 });
 
 // The panel opens from a button tool in the Token controls column, beside
@@ -262,13 +537,23 @@ Hooks.once("ready", () => {
       return record ? manager.resolve(record) : null;
     },
     getCurrentCombatant: () => adapter.getCurrentCombatant(),
-    rebuild: recoverWithConfirmation
+    rebuild: recoverWithConfirmation,
+    // For macros: start a room by its name ("A1") or id, as the panel button does.
+    startEncounter: nameOrId => {
+      const zones = readEncounters().encounters;
+      const zone = zones[nameOrId] ?? Object.values(zones).find(z => z.name.toLocaleLowerCase() === String(nameOrId).toLocaleLowerCase());
+      check(zone, "changed");
+      return startEncounter(zone.id);
+    }
   });
   const invalidate = () => { if (panel?.rendered) void refreshPanel(); };
   window.addEventListener("tml:selection", () => { invalidate(); void syncSelection(); });
   window.addEventListener("frb:talespire-ready", invalidate);
   for (const name of ["controlToken", "canvasReady", "updateToken", "deleteToken", "deleteScene", "deleteActor", "updateActor", "updateCombat", "deleteCombat", "updateUser"]) Hooks.on(name, invalidate);
-  Hooks.on("updateSetting", doc => { if (doc.key === `${ID}.links`) { manager.refresh(); invalidate(); } });
+  Hooks.on("updateSetting", doc => {
+    if (doc.key === `${ID}.links`) { manager.refresh(); invalidate(); }
+    if (doc.key === `${ID}.encounters`) invalidate();
+  });
   Hooks.on("preCreateToken", token => {
     if (token.getFlag(ID, "link")) token.updateSource({ [`flags.${ID}.-=link`]: null });
   });

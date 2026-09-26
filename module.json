@@ -1,8 +1,8 @@
 {
   "id": "talespire-mini-link",
   "title": "TaleSpire Foundry Bridge - Mini Links",
-  "description": "Persistent TaleSpire creature instance to Foundry scene Token links. Select an enemy mini in TaleSpire and it becomes your Foundry target, the same one VN Enhanced's Select as target sets. Companion for the rolfoundry Symbiote.",
-  "version": "1.4.0",
+  "description": "Persistent TaleSpire creature instance to Foundry scene Token links. Select an enemy mini in TaleSpire and it becomes your Foundry target, the same one VN Enhanced's Select as target sets. Group minis into encounters by room (A1, A2...) and start one as the Foundry combat. Companion for the rolfoundry Symbiote.",
+  "version": "1.5.0",
   "authors": [
     {
       "name": "GM RedVelvet",

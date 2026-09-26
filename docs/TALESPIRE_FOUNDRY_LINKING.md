@@ -42,6 +42,17 @@ Marcar como objetivo al seleccionar una mini (ajuste de cliente, activado por de
 
 La seleccion automatica es opcional y esta desactivada inicialmente. Con el objetivo automatico activo, controla solo tu propia mini vinculada (el atacante), de modo que elegir un enemigo nunca cambia quien ataca; sin el, controla la mini vinculada seleccionada como en 1.3.0. No cambia escenas automaticamente. El enfoque automatico requiere activar tambien la seleccion automatica.
 
+### Encuentros por sala (1.5.0)
+
+Agrupan las minis vinculadas por sala (A1, A2...) para que el panel no muestre la dungeon entera:
+
+1. Nuevo encuentro y darle nombre (se sugiere el siguiente numero).
+2. Seleccionar en TaleSpire las minis de la sala y pulsar Añadir selección. Cada vinculo tiene ademas un selector para moverlo de sala.
+3. Elegir la sala en el filtro para ver solo sus minis.
+4. Iniciar encuentro crea el combate de Foundry con los tokens de esa sala en la escena que estas viendo mas los tokens de los PJs. Termina, tras confirmar, el combate en curso de esa escena y reemplaza los enemigos del panel de PNJs de VN Enhanced; los PJs no se tocan. Las minis que esten en otra escena se avisan y no se incluyen.
+
+Se guardan en su propio ajuste de mundo (encounters), separado del registro de vinculos. Una mini pertenece como mucho a una sala, y conserva su sala aunque se vuelva a vincular a otro token. Solo el GM activo los edita; los jugadores ven el filtro y la sala de cada mini.
+
 ## Identidad y almacenamiento
 
 La clave es Campaign ID + Creature Instance ID de TaleSpire. El destino es el Token UUID completo Scene.<id>.Token.<id>. Actor UUID y estado de actor sintetico se guardan como comprobacion adicional, nunca como sustitucion de un token desaparecido.

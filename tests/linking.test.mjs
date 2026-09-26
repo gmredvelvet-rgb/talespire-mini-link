@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { emptyRegistry, indexes, keyOf, one, putLink, removeLink, fingerprint, conflicts, recoverLinks, timeout, selectionPlan, PROTOCOL } from '../scripts/model.js';
 import { LinkManager } from '../scripts/link-manager.js';
 import { FoundryAdapter, StorageService, TaleSpireAdapter } from '../scripts/adapters.js';
+import { emptyEncounters, validateEncounters, createEncounter, renameEncounter, deleteEncounter, assignMinis, encounterOf, sortedEncounters, suggestName } from '../scripts/encounters.js';
 
 const campaign = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const mini = n => `bbbbbbbb-bbbb-bbbb-bbbb-${String(n).padStart(12, '0')}`;
@@ -204,6 +205,103 @@ test('soft gate hands the licence to Velvet License Hub and never blocks', async
   game.view='join'; registered.length=0;
   for (const fn of hooks.ready) await fn();
   assert.deepEqual(registered,[],'no licence work outside the game view');
+});
+test('encounters: zones are disjoint, names unique, deleting keeps the minis', () => {
+  let r=emptyEncounters();
+  ({next:r}=createEncounter(r,'  A1 ','e1'));
+  ({next:r}=createEncounter(r,'A2','e2'));
+  assert.equal(r.encounters.e1.name,'A1');
+  assert.throws(()=>createEncounter(r,'a1','e3'),{code:'encounterExists'});
+  assert.throws(()=>createEncounter(r,'   ','e3'),{code:'encounterName'});
+  const k1=keyOf(campaign,mini(1)), k2=keyOf(campaign,mini(2));
+  r=assignMinis(r,'e1',[k1,k2]);
+  r=assignMinis(r,'e2',[k2]);                 // moving, never duplicating
+  assert.deepEqual(r.encounters.e1.members,[k1]);
+  assert.equal(encounterOf(r,k2),'e2');
+  r=assignMinis(r,null,[k1]);
+  assert.equal(encounterOf(r,k1),null);
+  r=deleteEncounter(r,'e2');
+  assert.equal(encounterOf(r,k2),null);
+  assert.throws(()=>renameEncounter(r,'e2','X'),{code:'changed'});
+  assert.equal(validateEncounters(JSON.parse(JSON.stringify(r))).revision,r.revision);
+  const broken=structuredClone(r); broken.encounters.e1.members=[k1,k1];
+  assert.throws(()=>validateEncounters(broken),{code:'conflict'});
+});
+test('encounters sort as numbers and suggest the next room', () => {
+  let r=emptyEncounters();
+  for (const [i,n] of ['A10','A2','A1'].entries()) ({next:r}=createEncounter(r,n,`e${i}`));
+  assert.deepEqual(sortedEncounters(r).map(e=>e.name),['A1','A2','A10']);
+  assert.equal(suggestName(r),'A11');
+  assert.equal(suggestName(createEncounter(emptyEncounters(),'Sala 9','x').next),'Sala 10');
+  assert.equal(suggestName(createEncounter(emptyEncounters(),'Cripta','x').next),'');
+  assert.equal(suggestName(emptyEncounters()),'');
+});
+
+test('starting an encounter replaces the combat and the VN enemies, keeping the party', async () => {
+  const hooks={}, calls=[], sceneId='AAAAAAAAAAAAAAAA';
+  const tok=(id,extra={})=>({id,actorId:`actor-${id}`,hidden:false,actor:{hasPlayerOwner:false},...extra});
+  const tokens=[tok('0000000000000001'),tok('0000000000000002',{hidden:true}),tok('pc',{actor:{hasPlayerOwner:true}})];
+  let links=emptyRegistry();
+  for (const n of [1,2,3]) links=add(links,{...record(n),tokenUuid:n===3?`Scene.CCCCCCCCCCCCCCCC.Token.${String(n).padStart(16,'0')}`:uuid(n),linkId:`l${n}`});
+  let enc=createEncounter(emptyEncounters(),'A1','e1').next;
+  enc=assignMinis(enc,'e1',[1,2,3].map(n=>keyOf(campaign,mini(n))));
+  const store={links,encounters:enc};
+  globalThis.Hooks={on:(n,f)=>(hooks[n]??=[]).push(f),once:(n,f)=>(hooks[n]??=[]).push(f),callAll(){}};
+  globalThis.foundry={utils:{randomID:()=>'id'},applications:{api:{ApplicationV2:class {},DialogV2:{confirm:async()=>{calls.push('confirm');return true;}}}}};
+  globalThis.ui={notifications:{info:m=>calls.push(`info:${m}`),warn:m=>calls.push(`warn:${m}`)}};
+  globalThis.canvas={ready:true,scene:{id:sceneId,tokens:{get:id=>tokens.find(t=>t.id===id),filter:fn=>tokens.filter(fn)}}};
+  globalThis.Combat={implementation:{create:async data=>{calls.push('create');calls.created=data;}}};
+  globalThis.VNEnhanced={getState:()=>({rightCast:[{id:'old-enemy'},{id:'actor-0000000000000001'}],showVN:true,combatMode:true}),
+    removeActor:async id=>calls.push(`remove:${id}`),setCombatMode:async on=>calls.push(`combat:${on}`)};
+  globalThis.game={release:{generation:14},socket:{connected:true},user:{id:'gm',isGM:true},users:{activeGM:{id:'gm'}},
+    combat:{scene:{id:sceneId},delete:async()=>calls.push('delete')},
+    modules:(()=>{const own={id:'talespire-mini-link',api:null};return {get:id=>id==='vnd-enhanced'?{active:true}:own};})(),
+    settings:{get:(_,k)=>k==='enabled'?true:store[k],register(){},set:async(_,k,v)=>{store[k]=v;}},
+    i18n:{localize:(k,d)=>d?`${k}${JSON.stringify(d)}`:k,has:()=>true}};
+  await import(`../scripts/main.js?encounter=${Date.now()}`);
+  for (const fn of hooks.init??[]) fn();
+  // ready wires window events and a heartbeat interval; neither exists here,
+  // and a real interval would keep the test process alive.
+  const realInterval=globalThis.setInterval;
+  globalThis.window={addEventListener(){}}; globalThis.setInterval=()=>0;
+  try { for (const fn of hooks.ready??[]) await fn(); }
+  finally { globalThis.setInterval=realInterval; }
+  const api=game.modules.get('talespire-mini-link').api;
+  await api.startEncounter('a1');             // by name, any case
+  // Order matters: VN would put its whole cast into the new combat.
+  assert.deepEqual(calls.slice(0,4),['confirm','delete','remove:old-enemy','create']);
+  assert.ok(!calls.includes('remove:actor-0000000000000001'),'enemies of the new room stay');
+  assert.deepEqual(calls.created.combatants.map(c=>c.tokenId).sort(),['0000000000000001','0000000000000002','pc']);
+  assert.equal(calls.created.combatants.find(c=>c.tokenId==='0000000000000002').hidden,true);
+  assert.equal(calls.created.active,true);
+  assert.ok(calls.includes('combat:true'));
+  assert.ok(calls.some(c=>c.startsWith('warn:TML.encElsewhere')),'the mini on another scene is reported');
+});
+test('token HUD copies the token name in two clicks, once per HUD', async () => {
+  const hooks={}, copied=[], notes=[], settings={enabled:true};
+  globalThis.Hooks={on:(n,f)=>(hooks[n]??=[]).push(f),once:(n,f)=>(hooks[n]??=[]).push(f),callAll(){}};
+  globalThis.foundry={utils:{randomID:()=>'id'},applications:{api:{ApplicationV2:class {}}}};
+  globalThis.ui={notifications:{info:m=>notes.push(m),warn:m=>notes.push(`warn:${m}`)}};
+  globalThis.game={release:{generation:14},settings:{get:(_,k)=>settings[k],register(){}},i18n:{localize:(k,d)=>d?`${k}:${d.name}`:k,has:()=>true},
+    user:{isGM:false},clipboard:{copyPlainText:async text=>{copied.push(text);}}};
+  const el=()=>{const e={dataset:{},attrs:{},listeners:{},setAttribute(k,v){e.attrs[k]=v;},addEventListener(n,f){e.listeners[n]=f;}};return e;};
+  globalThis.document={createElement:el};
+  const column={children:[],querySelector(sel){return this.children.find(c=>sel==='.tml-copy-name'&&c.className.includes('tml-copy-name'))??null;},append(c){this.children.push(c);}};
+  const html={querySelector:sel=>sel==='.col.left'?column:null};
+  const hud={document:{name:'Ornery Bugbear (1)'}};
+  await import(`../scripts/main.js?hud=${Date.now()}`);
+  const render=()=>{for (const fn of hooks.renderTokenHUD??[]) fn(hud,html);};
+  render(); render();
+  assert.equal(column.children.length,1,'re-rendering the HUD does not stack buttons');
+  const btn=column.children[0];
+  assert.match(btn.className,/control-icon/);
+  assert.equal(btn.attrs['aria-label'],'TML.copyName');
+  btn.listeners.click({preventDefault(){},stopPropagation(){}});
+  await new Promise(r=>setTimeout(r,0));
+  assert.deepEqual(copied,['Ornery Bugbear (1)']);
+  assert.ok(notes.some(n=>n.includes('Ornery Bugbear (1)')));
+  settings.enabled=false; column.children.length=0; render();
+  assert.equal(column.children.length,0,'no button while the module is disabled');
 });
 test('reply correlation and version checked',async()=>{
   globalThis.foundry={utils:{randomID:()=> 'req'}};

@@ -1,3 +1,18 @@
+# 1.5.0 - Encounters by room
+
+Encounters group linked minis into the rooms of an adventure (A1, A2, ...). Stored in their own world setting (encounters), beside the link registry, which is unchanged. Membership is by TaleSpire mini, so relinking a mini to another token keeps its room; a mini belongs to one room at most.
+
+- Panel: an encounter filter (all minis, no encounter, or one room) with counts. As the active GM: New encounter (suggests the next number, A3 -> A4), Add selection (the linked minis selected in TaleSpire), Rename, Delete (its minis stay linked) and a per-link selector to move a mini between rooms.
+- Start encounter: creates the Foundry combat with the room's tokens on the scene being viewed plus the party's tokens, ending the combat running on that scene after confirmation. Combatants are created inside the Combat in one operation, so only createCombat fires and VN Enhanced fills its cast once instead of racing a save per createCombatant. Hidden tokens join hidden. Minis on another scene are reported, not added.
+- VN Enhanced: the previous room's enemies leave its NPC panel through its public API (removeActor) before the combat is created, since VN adds its whole cast to the combat when combat mode starts; the party side is never touched. VN enters combat mode only if it is open or already fighting.
+- Links are titled by their Foundry token instead of the TaleSpire creature GUID, and row actions are icons (with tooltips), so a room reads at a glance.
+- The panel keeps an open dropdown open: the 5 s refresh waits while a select has focus.
+- API: startEncounter(nameOrId) for macros.
+- Copy a token's name in two clicks, to paste it as its TaleSpire mini's name: right-click the token and press the copy button on its HUD, or use the copy button beside the selected token and on each link in the panel. Uses game.clipboard, which falls back to execCommand when the embedded browser refuses the async clipboard.
+- Panel redesign: connection chips and an icon refresh in the header; the current selection as a card whose main step is a gold primary button; zone rename and delete beside the filter; Start encounter as the primary action of a room; links as cards with square icon actions and unlink set apart in red; problems (missing token, changed actor) flagged on the card instead of a status line on every link. One button vocabulary (primary, secondary, danger, ghost, icon) with hover, focus and disabled states, and Foundry tooltips instead of native titles.
+
+Tests: 4 new (zone rules, numeric sorting and name suggestion, starting an encounter end to end with Foundry and VN stubbed, the HUD copy button).
+
 # 1.4.0 - Select a mini, target its token
 
 New client setting Target Linked Minis on Selection (autoTarget, on by default). Selecting linked TaleSpire minis that are not the user's own makes them that user's Foundry targets (canvas.tokens.setTargets, mode replace) — the same targets VN Enhanced's Select as target sets, so its plates, VS duel and HUD follow through its targetToken hook with no VN change. Several selected minis give several targets; clearing the TaleSpire selection keeps the targets; the user's own mini is never targeted.

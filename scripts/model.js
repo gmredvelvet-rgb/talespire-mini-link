@@ -1,5 +1,5 @@
 export const ID = "talespire-mini-link";
-export const VERSION = "1.4.0";
+export const VERSION = "1.5.0";
 export const PROTOCOL = "talespire-foundry-links";
 export const SCHEMA = 1;
 export const TYPES = Object.freeze({

@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Extract version
+        id: ver
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Run tests
+        run: node --test tests/*.test.mjs
+
+      - name: Update module.json version
+        run: |
+          sed -i "s/\"version\": \".*\"/\"version\": \"${{ steps.ver.outputs.VERSION }}\"/" module.json
+
+      - name: Build module.zip
+        run: |
+          zip -r module.zip . \
+            --exclude "*.git*" \
+            --exclude ".github/*" \
+            --exclude "tests/*" \
+            --exclude "package.json" \
+            --exclude "module.zip"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "TaleSpire Foundry Bridge - Mini Links v${{ steps.ver.outputs.VERSION }}"
+          tag_name: ${{ github.ref_name }}
+          files: |
+            module.zip
+            module.json
+          token: ${{ secrets.GITHUB_TOKEN }}

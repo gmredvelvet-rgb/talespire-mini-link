@@ -1,0 +1,140 @@
+/* ==========================================================================
+   TaleSpire Foundry Bridge - Mini Links — licence / free-trial card
+
+   Vive en <body>, fuera de cualquier aplicacion del modulo, asi que no hereda
+   ningun tema y fija sus propios colores. El prefijo vne-*-license es unico por
+   modulo: varios de estos pueden estar cargados a la vez en el mismo mundo.
+   ========================================================================== */
+
+.tml-license-card {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  z-index: 10000;
+  width: min(330px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 20px;
+  border: 1px solid rgba(211, 176, 106, 0.4);
+  border-radius: 4px;
+  background: linear-gradient(180deg, #171320, #0c0a10);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  color: #e4d8bd;
+  font-family: "Signika", "Segoe UI", system-ui, sans-serif;
+  animation: tml-license-in 0.45s ease both;
+}
+
+@keyframes tml-license-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tml-license-card { animation: none; }
+}
+
+.tml-license-card header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #d3b06a;
+  font-family: "Signika", "Segoe UI", system-ui, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.tml-license-card .tml-license-badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid rgba(211, 176, 106, 0.45);
+  border-radius: 2px;
+  color: #e4d8bd;
+  font-size: 0.56rem;
+  letter-spacing: 0.2em;
+  white-space: nowrap;
+}
+
+.tml-license-card p {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.tml-license-card .tml-license-note {
+  margin-bottom: 8px;
+  color: #9b8e74;
+  font-size: 0.9rem;
+  font-style: italic;
+}
+
+.tml-license-card :is(button, .tml-license-primary) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid rgba(211, 176, 106, 0.35);
+  border-radius: 2px;
+  background: transparent;
+  color: #e4d8bd;
+  font-family: "Signika", "Segoe UI", system-ui, sans-serif;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.25s ease, color 0.25s ease, background-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.tml-license-card button:hover {
+  border-color: #d3b06a;
+  color: #d3b06a;
+  background: rgba(211, 176, 106, 0.08);
+  box-shadow: 0 0 14px rgba(211, 176, 106, 0.22);
+}
+
+.tml-license-card button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.tml-license-card .tml-license-primary {
+  border-color: transparent;
+  background: #d3b06a;
+  color: #171320;
+}
+
+.tml-license-card .tml-license-primary:hover {
+  background: #e6c684;
+  color: #171320;
+  box-shadow: 0 0 18px rgba(211, 176, 106, 0.35);
+}
+
+.tml-license-card .tml-license-dismiss {
+  min-height: 0;
+  padding: 2px;
+  border: none;
+  color: rgba(228, 216, 189, 0.62);
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.tml-license-card .tml-license-dismiss:hover {
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: #d3b06a;
+}

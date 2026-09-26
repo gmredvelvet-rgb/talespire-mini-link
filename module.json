@@ -1,0 +1,38 @@
+{
+  "id": "talespire-mini-link",
+  "title": "TaleSpire Foundry Bridge - Mini Links",
+  "description": "Persistent TaleSpire creature instance to Foundry scene Token links. Select an enemy mini in TaleSpire and it becomes your Foundry target, the same one VN Enhanced's Select as target sets. Companion for the rolfoundry Symbiote.",
+  "version": "1.4.0",
+  "authors": [
+    {
+      "name": "GM RedVelvet",
+      "email": "gmredvelvet@gmail.com",
+      "url": "https://github.com/gmredvelvet-rgb",
+      "discord": "gmredvelvet"
+    }
+  ],
+  "compatibility": { "minimum": "14", "verified": "14", "maximum": "14" },
+  "url": "https://github.com/gmredvelvet-rgb/talespire-mini-link",
+  "manifest": "https://github.com/gmredvelvet-rgb/talespire-mini-link/releases/latest/download/module.json",
+  "download": "https://github.com/gmredvelvet-rgb/talespire-mini-link/releases/latest/download/module.zip",
+  "readme": "https://github.com/gmredvelvet-rgb/talespire-mini-link#readme",
+  "bugs": "https://github.com/gmredvelvet-rgb/talespire-mini-link/issues",
+  "changelog": "https://github.com/gmredvelvet-rgb/talespire-mini-link/blob/main/TALESPIRE_LINKING_CHANGELOG.md",
+  "license": "SEE LICENSE IN LICENSE",
+  "relationships": {
+    "requires": [
+      {
+        "id": "velvet-license-hub",
+        "type": "module",
+        "manifest": "https://github.com/gmredvelvet-rgb/velvet-license-hub/releases/latest/download/module.json",
+        "compatibility": { "minimum": "2.0.0" }
+      }
+    ]
+  },
+  "esmodules": ["scripts/main.js", "scripts/license/boot.js"],
+  "styles": ["styles/linking.css", "styles/license.css"],
+  "languages": [
+    { "lang": "en", "name": "English", "path": "lang/en.json" },
+    { "lang": "es", "name": "Espanol", "path": "lang/es.json" }
+  ]
+}
